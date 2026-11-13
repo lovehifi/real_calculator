@@ -1,9 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Share2, Check, X } from 'lucide-react';
 import {
   AppPreferences,
   AssumptionCategory,
   ModelInputs,
   ProductCode,
+  ProjectRecord,
   ScenarioSnapshot,
   TimelineInputs,
   WorkspaceTab,
@@ -27,8 +29,13 @@ import { ChecksAndScenariosView } from './components/ChecksAndScenariosView';
 import { CustomizePopover } from './components/CustomizePopover';
 import { CommandPalette } from './components/CommandPalette';
 import { QuickCalculator } from './components/QuickCalculator';
+import { PrintReportModal } from './components/PrintReportModal';
+import { exportProjectToExcel } from './utils/excelExport';
+import { decodeProjectFromHash, encodeProjectToHash } from './utils/shareLink';
 
 const STORAGE_INPUTS_KEY = 'rc_desktop_inputs_v2';
+const STORAGE_PROJECTS_KEY = 'rc_desktop_projects_v1';
+const STORAGE_ACTIVE_PROJECT_KEY = 'rc_desktop_active_project_v1';
 const STORAGE_PREFS_KEY = 'rc_desktop_prefs_v2';
 const STORAGE_SCENARIOS_KEY = 'rc_desktop_scenarios_v2';
 
@@ -47,6 +54,50 @@ const DEFAULT_PREFS: AppPreferences = {
   unitDisplay: 'million',
 };
 
+function makeProjectId(): string {
+  return `proj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function loadInitialProjects(): { projects: ProjectRecord[]; activeId: string } {
+  try {
+    const savedList = localStorage.getItem(STORAGE_PROJECTS_KEY);
+    if (savedList) {
+      const parsed = JSON.parse(savedList) as ProjectRecord[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const normalized = parsed.map((p) => ({
+          id: p.id || makeProjectId(),
+          name: p.name || p.inputs?.projectName || 'Dự án BĐS',
+          updatedAt: p.updatedAt || new Date().toISOString(),
+          inputs: normalizeImportedInputs((p.inputs || {}) as unknown as Record<string, unknown>),
+        }));
+        const savedActive = localStorage.getItem(STORAGE_ACTIVE_PROJECT_KEY);
+        const match = normalized.find((p) => p.id === savedActive);
+        return { projects: normalized, activeId: match ? match.id : normalized[0].id };
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+
+  let seedInputs = cloneInputs(SAMPLE_PROJECT_INPUTS);
+  try {
+    const legacy = localStorage.getItem(STORAGE_INPUTS_KEY);
+    if (legacy) {
+      seedInputs = normalizeImportedInputs(JSON.parse(legacy) as Record<string, unknown>);
+    }
+  } catch {
+    // ignore
+  }
+
+  const initialRecord: ProjectRecord = {
+    id: 'proj_default',
+    name: seedInputs.projectName,
+    updatedAt: new Date().toISOString(),
+    inputs: seedInputs,
+  };
+  return { projects: [initialRecord], activeId: initialRecord.id };
+}
+
 export default function App() {
   const [prefs, setPrefs] = useState<AppPreferences>(() => {
     try {
@@ -58,18 +109,18 @@ export default function App() {
     return DEFAULT_PREFS;
   });
 
+  const initialWorkspace = useMemo(() => loadInitialProjects(), []);
+  const [projects, setProjects] = useState<ProjectRecord[]>(initialWorkspace.projects);
+  const [activeProjectId, setActiveProjectId] = useState<string>(initialWorkspace.activeId);
+
   const [inputs, setInputs] = useState<ModelInputs>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_INPUTS_KEY);
-      if (saved) return normalizeImportedInputs(JSON.parse(saved) as Record<string, unknown>);
-    } catch {
-      // ignore storage errors
-    }
-    return cloneInputs(SAMPLE_PROJECT_INPUTS);
+    const active = initialWorkspace.projects.find((p) => p.id === initialWorkspace.activeId);
+    return cloneInputs(active ? active.inputs : SAMPLE_PROJECT_INPUTS);
   });
 
   const [committedInputs, setCommittedInputs] = useState<ModelInputs>(inputs);
   const [undoStack, setUndoStack] = useState<ModelInputs[]>([]);
+  const [redoStack, setRedoStack] = useState<ModelInputs[]>([]);
   const [scenarios, setScenarios] = useState<ScenarioSnapshot[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_SCENARIOS_KEY);
@@ -85,9 +136,12 @@ export default function App() {
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [quickCalcOpen, setQuickCalcOpen] = useState(false);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [saveScenarioModalOpen, setSaveScenarioModalOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [scenarioDraftName, setScenarioDraftName] = useState('');
+  const [sharedDealBanner, setSharedDealBanner] = useState<ModelInputs | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,7 +150,31 @@ export default function App() {
     setToastMsg(msg);
     setTimeout(() => {
       setToastMsg((curr) => (curr === msg ? null : curr));
-    }, 2400);
+    }, 2600);
+  }, []);
+
+  // Hydrate shared deal from URL hash (#deal=...) on load or hashchange
+  useEffect(() => {
+    let active = true;
+    const checkHash = async () => {
+      const decoded = await decodeProjectFromHash(window.location.hash);
+      if (active && decoded) {
+        setInputs(decoded);
+        setCommittedInputs(decoded);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSharedDealBanner(decoded);
+      }
+    };
+    void checkHash();
+    const onHashChange = () => {
+      void checkHash();
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => {
+      active = false;
+      window.removeEventListener('hashchange', onHashChange);
+    };
   }, []);
 
   // Sync dark mode class & accent attribute on documentElement
@@ -115,17 +193,40 @@ export default function App() {
     }
   }, [prefs]);
 
-  // Persist inputs
+  // Persist inputs and keep active ProjectRecord synchronized (unless previewing an unsaved shared URL)
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_INPUTS_KEY, JSON.stringify(inputs));
-    } catch {
-      // ignore
+    if (!sharedDealBanner) {
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === activeProjectId
+            ? {
+                ...p,
+                name: inputs.projectName,
+                updatedAt: new Date().toISOString(),
+                inputs,
+              }
+            : p
+        )
+      );
+      try {
+        localStorage.setItem(STORAGE_INPUTS_KEY, JSON.stringify(inputs));
+      } catch {
+        // ignore
+      }
     }
     if (prefs.autoCalculate) {
       setCommittedInputs(inputs);
     }
-  }, [inputs, prefs.autoCalculate]);
+  }, [activeProjectId, inputs, prefs.autoCalculate, sharedDealBanner]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_PROJECTS_KEY, JSON.stringify(projects));
+      localStorage.setItem(STORAGE_ACTIVE_PROJECT_KEY, activeProjectId);
+    } catch {
+      // ignore
+    }
+  }, [projects, activeProjectId]);
 
   useEffect(() => {
     try {
@@ -141,7 +242,8 @@ export default function App() {
 
   const applyNewInputs = useCallback((next: ModelInputs) => {
     setInputs((prev) => {
-      setUndoStack((stk) => [...stk.slice(-19), prev]);
+      setUndoStack((stk) => [...stk.slice(-24), prev]);
+      setRedoStack([]);
       return next;
     });
   }, []);
@@ -150,7 +252,8 @@ export default function App() {
     <K extends keyof ModelInputs>(key: K, value: ModelInputs[K]) => {
       setInputs((prev) => {
         if (prev[key] === value) return prev;
-        setUndoStack((stk) => [...stk.slice(-19), prev]);
+        setUndoStack((stk) => [...stk.slice(-24), prev]);
+        setRedoStack([]);
         return { ...prev, [key]: value };
       });
     },
@@ -159,7 +262,8 @@ export default function App() {
 
   const handleUpdateTimeline = useCallback((nextTimeline: TimelineInputs) => {
     setInputs((prev) => {
-      setUndoStack((stk) => [...stk.slice(-19), prev]);
+      setUndoStack((stk) => [...stk.slice(-24), prev]);
+      setRedoStack([]);
       return { ...prev, timeline: nextTimeline };
     });
   }, []);
@@ -168,13 +272,157 @@ export default function App() {
     setUndoStack((stk) => {
       if (stk.length === 0) return stk;
       const previous = stk[stk.length - 1];
-      setInputs(previous);
+      setInputs((curr) => {
+        setRedoStack((r) => [...r.slice(-24), curr]);
+        return previous;
+      });
+      return stk.slice(0, -1);
+    });
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    setRedoStack((stk) => {
+      if (stk.length === 0) return stk;
+      const nextState = stk[stk.length - 1];
+      setInputs((curr) => {
+        setUndoStack((u) => [...u.slice(-24), curr]);
+        return nextState;
+      });
       return stk.slice(0, -1);
     });
   }, []);
 
   const result = useMemo(() => runFinancialModel(committedInputs, true), [committedInputs]);
   const isDirtyManual = !prefs.autoCalculate && committedInputs !== inputs;
+
+  // Multi-Project Library Actions
+  const handleSelectProject = useCallback(
+    (id: string) => {
+      const target = projects.find((p) => p.id === id);
+      if (!target) return;
+      setSharedDealBanner(null);
+      if (window.location.hash.startsWith('#deal=')) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+      setActiveProjectId(target.id);
+      const nextInp = cloneInputs(target.inputs);
+      setInputs(nextInp);
+      setCommittedInputs(nextInp);
+      setUndoStack([]);
+      setRedoStack([]);
+      showToast(t(prefs.lang, `Đã chuyển sang: ${target.name}`, `Switched to: ${target.name}`));
+    },
+    [prefs.lang, projects, showToast]
+  );
+
+  const handleCreateNewProject = useCallback(() => {
+    const newTpl = PRESET_TEMPLATES.find((p) => p.id === 'clean_blank') ?? PRESET_TEMPLATES[0];
+    const fresh = newTpl.build();
+    fresh.projectName = `${t(prefs.lang, 'Dự án BĐS Mới', 'New Real Estate Deal')} #${projects.length + 1}`;
+    const newRec: ProjectRecord = {
+      id: makeProjectId(),
+      name: fresh.projectName,
+      updatedAt: new Date().toISOString(),
+      inputs: fresh,
+    };
+    setSharedDealBanner(null);
+    setProjects((prev) => [newRec, ...prev]);
+    setActiveProjectId(newRec.id);
+    setInputs(fresh);
+    setCommittedInputs(fresh);
+    setUndoStack([]);
+    setRedoStack([]);
+    showToast(t(prefs.lang, `Đã tạo dự án mới: ${fresh.projectName}`, `Created: ${fresh.projectName}`));
+  }, [prefs.lang, projects.length, showToast]);
+
+  const handleDuplicateProject = useCallback(() => {
+    const copy = cloneInputs(inputs);
+    copy.projectName = `${inputs.projectName} (${t(prefs.lang, 'Bản sao', 'Copy')})`;
+    const newRec: ProjectRecord = {
+      id: makeProjectId(),
+      name: copy.projectName,
+      updatedAt: new Date().toISOString(),
+      inputs: copy,
+    };
+    setSharedDealBanner(null);
+    setProjects((prev) => [newRec, ...prev]);
+    setActiveProjectId(newRec.id);
+    setInputs(copy);
+    setCommittedInputs(copy);
+    setUndoStack([]);
+    setRedoStack([]);
+    showToast(t(prefs.lang, `Đã nhân bản: ${copy.projectName}`, `Duplicated: ${copy.projectName}`));
+  }, [inputs, prefs.lang, showToast]);
+
+  const handleDeleteProject = useCallback(
+    (id: string) => {
+      if (projects.length <= 1) return;
+      const remaining = projects.filter((p) => p.id !== id);
+      setProjects(remaining);
+      if (id === activeProjectId && remaining.length > 0) {
+        const nextActive = remaining[0];
+        setActiveProjectId(nextActive.id);
+        const cloned = cloneInputs(nextActive.inputs);
+        setInputs(cloned);
+        setCommittedInputs(cloned);
+        setUndoStack([]);
+        setRedoStack([]);
+      }
+      showToast(t(prefs.lang, 'Đã xoá dự án khỏi thư viện', 'Deleted project'));
+    },
+    [activeProjectId, prefs.lang, projects, showToast]
+  );
+
+  const handleSaveSharedDealToLibrary = useCallback(() => {
+    const copy = cloneInputs(inputs);
+    const newRec: ProjectRecord = {
+      id: makeProjectId(),
+      name: copy.projectName,
+      updatedAt: new Date().toISOString(),
+      inputs: copy,
+    };
+    setProjects((prev) => [newRec, ...prev]);
+    setActiveProjectId(newRec.id);
+    setSharedDealBanner(null);
+    if (window.location.hash.startsWith('#deal=')) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+    showToast(
+      t(
+        prefs.lang,
+        `Đã lưu "${copy.projectName}" vào Thư viện của bạn`,
+        `Saved "${copy.projectName}" to your Library`
+      )
+    );
+  }, [inputs, prefs.lang, showToast]);
+
+  const handleCopyShareLink = useCallback(async () => {
+    try {
+      const hash = await encodeProjectToHash(inputs);
+      const shareUrl = `${window.location.origin}${window.location.pathname}${hash}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        showToast(
+          t(
+            prefs.lang,
+            'Đã sao chép liên kết chia sẻ dự án vào khay nhớ tạm',
+            'Copied shareable deal link to clipboard'
+          )
+        );
+      } else {
+        window.location.hash = hash;
+        showToast(
+          t(
+            prefs.lang,
+            'Đã cập nhật liên kết chia sẻ trên thanh địa chỉ trình duyệt',
+            'Updated shareable link in browser URL bar'
+          )
+        );
+      }
+    } catch {
+      showToast(t(prefs.lang, 'Không thể tạo liên kết chia sẻ', 'Could not create share link'));
+    }
+  }, [inputs, prefs.lang, showToast]);
 
   const handleExportJson = useCallback(() => {
     const blob = new Blob([JSON.stringify(inputs, null, 2)], { type: 'application/json' });
@@ -187,6 +435,11 @@ export default function App() {
     URL.revokeObjectURL(url);
     showToast(t(prefs.lang, 'Đã xuất tệp dự án .JSON', 'Project .JSON saved'));
   }, [inputs, prefs.lang, showToast]);
+
+  const handleExportExcel = useCallback(() => {
+    exportProjectToExcel(inputs, result, prefs);
+    showToast(t(prefs.lang, 'Đã xuất file Excel 6 sheet (.xlsx)', 'Exported 6-sheet Excel (.xlsx)'));
+  }, [inputs, prefs, result, showToast]);
 
   const handleExportCsv = useCallback(() => {
     const headers = [
@@ -211,6 +464,7 @@ export default function App() {
       ['Net Cash Flow', result.cf.net.total, ...result.cf.net.q],
       ['Ending Cash Balance', result.cf.end.total, ...result.cf.end.q],
       ['Free Cash Flow to Equity (FCFE)', result.cf.fcfe.total, ...result.cf.fcfe.q],
+      ['Ending Loan Balance', result.cf.debtBalance.total, ...result.cf.debtBalance.q],
     ];
 
     const csvContent =
@@ -218,10 +472,7 @@ export default function App() {
       [
         headers.join(','),
         ...rows.map((r) =>
-          [
-            `"${r[0]}"`,
-            ...r.slice(1).map((n) => Math.round(Number(n) || 0)),
-          ].join(',')
+          [`"${r[0]}"`, ...r.slice(1).map((n) => Math.round(Number(n) || 0))].join(',')
         ),
       ].join('\n');
 
@@ -259,13 +510,7 @@ export default function App() {
       if (!found) return;
       const built = found.build();
       applyNewInputs(built);
-      showToast(
-        t(
-          prefs.lang,
-          `Đã khởi tạo: ${found.nameVi}`,
-          `Loaded template: ${found.nameEn}`
-        )
-      );
+      showToast(t(prefs.lang, `Đã khởi tạo: ${found.nameVi}`, `Loaded template: ${found.nameEn}`));
     },
     [applyNewInputs, prefs.lang, showToast]
   );
@@ -289,9 +534,7 @@ export default function App() {
       next.timeline.collection[p] = norm(next.timeline.collection[p]);
     }
     applyNewInputs(next);
-    showToast(
-      t(prefs.lang, 'Đã chuẩn hoá toàn bộ tiến độ 40 quý về 100%', 'Normalized all 40Q rows to 100%')
-    );
+    showToast(t(prefs.lang, 'Đã chuẩn hoá toàn bộ tiến độ 40 quý về 100%', 'Normalized all 40Q rows to 100%'));
   }, [applyNewInputs, inputs, prefs.lang, showToast]);
 
   const handleSaveScenario = useCallback(
@@ -328,7 +571,26 @@ export default function App() {
       if (!mod) return;
 
       const key = e.key.toLowerCase();
-      if (key === 'k') {
+      const targetTag = (e.target as HTMLElement | null)?.tagName;
+      const isEditingText = targetTag === 'INPUT' || targetTag === 'TEXTAREA';
+
+      if (key === 'z' && !isEditingText) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if (key === 'y' && !isEditingText) {
+        e.preventDefault();
+        handleRedo();
+      } else if (key === 'p') {
+        e.preventDefault();
+        setPrintModalOpen(true);
+      } else if (key === 'n') {
+        e.preventDefault();
+        handleCreateNewProject();
+      } else if (key === 'k') {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       } else if (key === '1') {
@@ -376,8 +638,11 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
+    handleCreateNewProject,
     handleExportCsv,
     handleExportJson,
+    handleRedo,
+    handleUndo,
     inputs,
     prefs.lang,
     prefs.sidebarCollapsed,
@@ -388,7 +653,6 @@ export default function App() {
 
   const issueCount = result.checks.filter((c) => c.status !== 'OK').length;
 
-  // Wallpaper classes for Framed Tauri Desktop mode
   const wallpaperBg = {
     sonoma:
       'bg-[radial-gradient(ellipse_at_top_left,_#38bdf8_0%,_#818cf8_38%,_#34d399_78%,_#0f172a_100%)] dark:bg-[radial-gradient(ellipse_at_top_left,_#0c4a6e_0%,_#1e1b4b_45%,_#064e3b_85%,_#020617_100%)]',
@@ -409,281 +673,362 @@ export default function App() {
   const isFramed = prefs.windowMode === 'framed';
 
   return (
-    <div
-      className={`h-screen w-screen overflow-hidden flex items-center justify-center transition-colors duration-300 ${
-        isFramed ? `${wallpaperBg} p-2.5 sm:p-4` : 'bg-slate-100 dark:bg-slate-950 p-0'
-      }`}
-    >
-      {/* Hidden JSON File Input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,application/json"
-        onChange={handleImportFile}
-        className="hidden"
-      />
-
-      {/* Standalone Tauri macOS Window Container */}
+    <>
       <div
-        className={`w-full h-full flex flex-col overflow-hidden transition-all ${windowShellBlur} ${
-          isFramed
-            ? 'rounded-[18px] border border-white/55 dark:border-white/14 shadow-[0_28px_70px_-15px_rgba(0,0,0,0.42)]'
-            : ''
+        id="app-desktop-shell"
+        className={`h-screen w-screen overflow-hidden flex items-center justify-center transition-colors duration-300 ${
+          isFramed ? `${wallpaperBg} p-1.5 sm:p-4` : 'bg-slate-100 dark:bg-slate-950 p-0'
         }`}
       >
-        {/* Top macOS Titlebar & Native Dropdown Menus */}
-        <MacMenuBar
-          projectName={inputs.projectName}
-          onProjectNameChange={(name) => handleUpdateField('projectName', name)}
-          prefs={prefs}
-          onUpdatePrefs={updatePrefs}
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
-          canUndo={undoStack.length > 0}
-          onUndo={handleUndo}
-          onLoadPreset={handleLoadPreset}
-          onTriggerImportJson={() => fileInputRef.current?.click()}
-          onExportJson={handleExportJson}
-          onExportCsv={handleExportCsv}
-          onNormalizeAllTimelines={handleNormalizeAllTimelines}
-          onOpenCommandPalette={() => setPaletteOpen(true)}
-          onToggleQuickCalc={() => setQuickCalcOpen((v) => !v)}
-          onToggleCustomize={() => setCustomizeOpen((v) => !v)}
-          onSaveScenarioModal={() => {
-            setScenarioDraftName('');
-            setSaveScenarioModalOpen(true);
-          }}
-          onManualRecalculate={() => {
-            setCommittedInputs(inputs);
-            showToast(t(prefs.lang, 'Đã tính toán lại mô hình 40 quý', 'Recalculated 40Q model'));
-          }}
-          isDirtyManual={isDirtyManual}
-          designMethod={inputs.design_method}
-          onChangeDesignMethod={(m) => handleUpdateField('design_method', m)}
-          onRequestResetConfirm={() => setResetConfirmOpen(true)}
+        {/* Hidden JSON File Input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={handleImportFile}
+          className="hidden"
         />
 
-        {/* Body: Left Frosted Source-List Sidebar + Right Workspace */}
-        <div className="flex-1 flex min-h-0 overflow-hidden">
-          <MacSidebar
+        {/* Standalone Tauri macOS Window Container */}
+        <div
+          className={`w-full h-full flex flex-col overflow-hidden transition-all ${windowShellBlur} ${
+            isFramed
+              ? 'rounded-[14px] sm:rounded-[18px] border border-white/55 dark:border-white/14 shadow-[0_28px_70px_-15px_rgba(0,0,0,0.42)]'
+              : ''
+          }`}
+        >
+          {/* Top macOS Titlebar & Native Dropdown Menus */}
+          <MacMenuBar
+            projectName={inputs.projectName}
+            onProjectNameChange={(name) => handleUpdateField('projectName', name)}
             prefs={prefs}
             onUpdatePrefs={updatePrefs}
             activeTab={activeTab}
             onSelectTab={setActiveTab}
-            assumptionCat={assumptionCat}
-            onSelectAssumptionCat={setAssumptionCat}
-            startYear={inputs.model_start_year}
-            issueCount={issueCount}
-            scenarios={scenarios}
-            onLoadScenario={(sc) => {
-              applyNewInputs(cloneInputs(sc.inputs));
-              showToast(t(prefs.lang, `Đã nạp kịch bản: ${sc.name}`, `Loaded scenario: ${sc.name}`));
+            canUndo={undoStack.length > 0}
+            canRedo={redoStack.length > 0}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onLoadPreset={handleLoadPreset}
+            onDuplicateProject={handleDuplicateProject}
+            onTriggerImportJson={() => fileInputRef.current?.click()}
+            onExportJson={handleExportJson}
+            onExportCsv={handleExportCsv}
+            onExportExcel={handleExportExcel}
+            onOpenPrint={() => setPrintModalOpen(true)}
+            onCopyShareLink={() => {
+              void handleCopyShareLink();
             }}
-            onOpenSaveScenario={() => {
+            onNormalizeAllTimelines={handleNormalizeAllTimelines}
+            onOpenCommandPalette={() => setPaletteOpen(true)}
+            onToggleQuickCalc={() => setQuickCalcOpen((v) => !v)}
+            onToggleCustomize={() => setCustomizeOpen((v) => !v)}
+            onToggleMobileSidebar={() => setMobileSidebarOpen((v) => !v)}
+            onSaveScenarioModal={() => {
               setScenarioDraftName('');
               setSaveScenarioModalOpen(true);
             }}
+            onManualRecalculate={() => {
+              setCommittedInputs(inputs);
+              showToast(t(prefs.lang, 'Đã tính toán lại mô hình 40 quý', 'Recalculated 40Q model'));
+            }}
+            isDirtyManual={isDirtyManual}
+            designMethod={inputs.design_method}
+            onChangeDesignMethod={(m) => handleUpdateField('design_method', m)}
+            onRequestResetConfirm={() => setResetConfirmOpen(true)}
           />
 
-          <main className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-            {prefs.showKpiRibbon && <KpiRibbon result={result} prefs={prefs} />}
-
-            <div className="flex-1 min-h-0 overflow-hidden">
-              {activeTab === 'assumptions' && (
-                <AssumptionsView
-                  inputs={inputs}
-                  onUpdateField={handleUpdateField}
-                  result={result}
-                  prefs={prefs}
-                  onUpdatePrefs={updatePrefs}
-                  category={assumptionCat}
-                  onSelectCategory={setAssumptionCat}
-                />
-              )}
-
-              {activeTab === 'timeline' && (
-                <TimelineView
-                  inputs={inputs}
-                  onUpdateTimeline={handleUpdateTimeline}
-                  result={result}
-                  prefs={prefs}
-                />
-              )}
-
-              {activeTab === 'dashboard' && (
-                <DashboardView inputs={inputs} result={result} prefs={prefs} />
-              )}
-
-              {activeTab === 'cashflow' && (
-                <CashFlowView
-                  inputs={inputs}
-                  result={result}
-                  prefs={prefs}
-                  onExportCsv={handleExportCsv}
-                />
-              )}
-
-              {activeTab === 'checks' && (
-                <ChecksAndScenariosView
-                  result={result}
-                  prefs={prefs}
-                  scenarios={scenarios}
-                  onSaveScenario={handleSaveScenario}
-                  onLoadScenario={(sc) => {
-                    applyNewInputs(cloneInputs(sc.inputs));
-                    showToast(
-                      t(prefs.lang, `Đã nạp kịch bản: ${sc.name}`, `Loaded scenario: ${sc.name}`)
-                    );
-                  }}
-                  onDeleteScenario={(id) =>
-                    setScenarios((prev) => prev.filter((item) => item.id !== id))
-                  }
-                  onNavigateTab={setActiveTab}
-                />
-              )}
+          {/* Shared Deal Import Banner when opened via #deal=... */}
+          {sharedDealBanner && (
+            <div className="shrink-0 px-4 py-2 bg-[var(--accent-soft)] border-b border-[var(--accent-border)] flex flex-wrap items-center justify-between gap-2 text-[12.5px]">
+              <div className="flex items-center gap-2 text-slate-900 dark:text-white min-w-0">
+                <Share2 className="w-4 h-4 text-[var(--accent-primary)] shrink-0" />
+                <span className="truncate">
+                  {t(
+                    prefs.lang,
+                    `Đang xem dự án được chia sẻ qua liên kết: "${inputs.projectName}"`,
+                    `Viewing shared deal from link: "${inputs.projectName}"`
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSaveSharedDealToLibrary}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-[12px] font-semibold bg-[var(--accent-primary)] text-white hover:brightness-105 transition cursor-pointer whitespace-nowrap"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{t(prefs.lang, 'Lưu vào Thư viện của tôi', 'Save to My Library')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSharedDealBanner(null)}
+                  className="p-1 rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-white transition cursor-pointer"
+                  aria-label={t(prefs.lang, 'Đóng', 'Dismiss')}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-          </main>
-        </div>
-      </div>
+          )}
 
-      {/* Overlays & Native macOS Sheets */}
-      <CustomizePopover
-        open={customizeOpen}
-        onClose={() => setCustomizeOpen(false)}
-        prefs={prefs}
-        onUpdatePrefs={updatePrefs}
-      />
-
-      <CommandPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        prefs={prefs}
-        onUpdatePrefs={updatePrefs}
-        onSelectTab={setActiveTab}
-        onLoadPreset={handleLoadPreset}
-        onExportJson={handleExportJson}
-        onExportCsv={handleExportCsv}
-        onOpenSaveScenario={() => {
-          setScenarioDraftName('');
-          setSaveScenarioModalOpen(true);
-        }}
-      />
-
-      <QuickCalculator
-        open={quickCalcOpen}
-        onClose={() => setQuickCalcOpen(false)}
-        lang={prefs.lang}
-      />
-
-      {/* Native macOS Save Scenario Sheet */}
-      {saveScenarioModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-xs"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setSaveScenarioModalOpen(false);
-          }}
-        >
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const label =
-                scenarioDraftName.trim() ||
-                `${t(prefs.lang, 'Phương án', 'Scenario')} #${scenarios.length + 1}`;
-              handleSaveScenario(label);
-              setSaveScenarioModalOpen(false);
-            }}
-            className="w-96 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border border-slate-900/15 dark:border-white/15 shadow-2xl p-5 space-y-4"
-          >
-            <div>
-              <h3 className="text-[15px] font-semibold text-slate-950 dark:text-white">
-                {t(prefs.lang, 'Lưu bản chụp Kịch bản mới', 'Save Scenario Snapshot')}
-              </h3>
-              <p className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-1">
-                {t(
-                  prefs.lang,
-                  'Lưu toàn bộ giả định và tiến độ 40 quý hiện tại để đối chiếu hiệu quả.',
-                  'Store current assumptions and 40-quarter schedule for side-by-side comparison.'
-                )}
-              </p>
-            </div>
-            <input
-              type="text"
-              autoFocus
-              value={scenarioDraftName}
-              onChange={(e) => setScenarioDraftName(e.target.value)}
-              placeholder={t(prefs.lang, 'Ví dụ: Phương án cơ sở / Giá bán +10%', 'e.g. Base Case / Price +10%')}
-              className="w-full px-3 py-2 rounded-xl text-[13px] bg-slate-100 dark:bg-slate-800 border border-slate-900/12 dark:border-white/12 text-slate-900 dark:text-white outline-none focus:border-[var(--accent-primary)]"
+          {/* Body: Left Frosted Source-List Sidebar + Right Workspace */}
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            <MacSidebar
+              prefs={prefs}
+              onUpdatePrefs={updatePrefs}
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
+              assumptionCat={assumptionCat}
+              onSelectAssumptionCat={setAssumptionCat}
+              startYear={inputs.model_start_year}
+              issueCount={issueCount}
+              projects={projects}
+              activeProjectId={activeProjectId}
+              onSelectProject={handleSelectProject}
+              onCreateNewProject={handleCreateNewProject}
+              onDuplicateProject={handleDuplicateProject}
+              onDeleteProject={handleDeleteProject}
+              scenarios={scenarios}
+              onLoadScenario={(sc) => {
+                applyNewInputs(cloneInputs(sc.inputs));
+                showToast(t(prefs.lang, `Đã nạp kịch bản: ${sc.name}`, `Loaded scenario: ${sc.name}`));
+              }}
+              onOpenSaveScenario={() => {
+                setScenarioDraftName('');
+                setSaveScenarioModalOpen(true);
+              }}
+              mobileOpen={mobileSidebarOpen}
+              onCloseMobile={() => setMobileSidebarOpen(false)}
             />
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setSaveScenarioModalOpen(false)}
-                className="px-3.5 py-1.5 rounded-lg text-[12.5px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-900/6 dark:hover:bg-white/10 cursor-pointer"
-              >
-                {t(prefs.lang, 'Huỷ', 'Cancel')}
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg text-[12.5px] font-semibold bg-[var(--accent-primary)] text-white hover:brightness-105 cursor-pointer"
-              >
-                {t(prefs.lang, 'Lưu Kịch bản', 'Save')}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
 
-      {/* Native macOS Reset Confirmation Sheet (Replaces window.confirm) */}
-      {resetConfirmOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-xs"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setResetConfirmOpen(false);
-          }}
-        >
-          <div className="w-96 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border border-slate-900/15 dark:border-white/15 shadow-2xl p-5 space-y-4">
-            <div>
-              <h3 className="text-[15px] font-semibold text-slate-950 dark:text-white">
-                {t(prefs.lang, 'Khôi phục về Dự án Mẫu Mặc định?', 'Reset to Default Sample Project?')}
-              </h3>
-              <p className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-1">
-                {t(
-                  prefs.lang,
-                  'Các thông số đang chỉnh sửa sẽ trở về mẫu Khu Đô Thị Hỗn Hợp Riverside Park (bạn vẫn có thể Hoàn tác bằng ⌘Z).',
-                  'Active inputs will revert to the Riverside Park default sample (you can still Undo with ⌘Z).'
+            <main className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+              {prefs.showKpiRibbon && <KpiRibbon result={result} prefs={prefs} />}
+
+              <div className="flex-1 min-h-0 overflow-hidden">
+                {activeTab === 'assumptions' && (
+                  <AssumptionsView
+                    inputs={inputs}
+                    onUpdateField={handleUpdateField}
+                    result={result}
+                    prefs={prefs}
+                    onUpdatePrefs={updatePrefs}
+                    category={assumptionCat}
+                    onSelectCategory={setAssumptionCat}
+                  />
                 )}
-              </p>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setResetConfirmOpen(false)}
-                className="px-3.5 py-1.5 rounded-lg text-[12.5px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-900/6 dark:hover:bg-white/10 cursor-pointer"
-              >
-                {t(prefs.lang, 'Giữ nguyên', 'Cancel')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  applyNewInputs(cloneInputs(SAMPLE_PROJECT_INPUTS));
-                  setResetConfirmOpen(false);
-                  showToast(t(prefs.lang, 'Đã khôi phục dự án mẫu mặc định', 'Reset to default sample'));
-                }}
-                className="px-4 py-1.5 rounded-lg text-[12.5px] font-semibold bg-rose-600 text-white hover:bg-rose-500 cursor-pointer"
-              >
-                {t(prefs.lang, 'Khôi phục', 'Reset')}
-              </button>
-            </div>
+
+                {activeTab === 'timeline' && (
+                  <TimelineView
+                    inputs={inputs}
+                    onUpdateTimeline={handleUpdateTimeline}
+                    result={result}
+                    prefs={prefs}
+                  />
+                )}
+
+                {activeTab === 'dashboard' && (
+                  <DashboardView
+                    inputs={inputs}
+                    result={result}
+                    prefs={prefs}
+                    onExportExcel={handleExportExcel}
+                    onOpenPrint={() => setPrintModalOpen(true)}
+                  />
+                )}
+
+                {activeTab === 'cashflow' && (
+                  <CashFlowView
+                    inputs={inputs}
+                    result={result}
+                    prefs={prefs}
+                    onExportCsv={handleExportCsv}
+                    onExportExcel={handleExportExcel}
+                    onOpenPrint={() => setPrintModalOpen(true)}
+                  />
+                )}
+
+                {activeTab === 'checks' && (
+                  <ChecksAndScenariosView
+                    result={result}
+                    prefs={prefs}
+                    scenarios={scenarios}
+                    onSaveScenario={handleSaveScenario}
+                    onLoadScenario={(sc) => {
+                      applyNewInputs(cloneInputs(sc.inputs));
+                      showToast(
+                        t(prefs.lang, `Đã nạp kịch bản: ${sc.name}`, `Loaded scenario: ${sc.name}`)
+                      );
+                    }}
+                    onDeleteScenario={(id) =>
+                      setScenarios((prev) => prev.filter((item) => item.id !== id))
+                    }
+                    onNavigateTab={setActiveTab}
+                  />
+                )}
+              </div>
+            </main>
           </div>
         </div>
-      )}
 
-      {/* Subtle macOS HUD Toast */}
-      {toastMsg && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-slate-900/88 dark:bg-white/90 text-white dark:text-slate-950 backdrop-blur-xl text-[12.5px] font-medium shadow-lg pointer-events-none">
-          {toastMsg}
-        </div>
-      )}
-    </div>
+        {/* Overlays & Native macOS Sheets */}
+        <CustomizePopover
+          open={customizeOpen}
+          onClose={() => setCustomizeOpen(false)}
+          prefs={prefs}
+          onUpdatePrefs={updatePrefs}
+        />
+
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          prefs={prefs}
+          onUpdatePrefs={updatePrefs}
+          onSelectTab={setActiveTab}
+          onLoadPreset={handleLoadPreset}
+          onExportJson={handleExportJson}
+          onExportCsv={handleExportCsv}
+          onExportExcel={handleExportExcel}
+          onOpenPrint={() => setPrintModalOpen(true)}
+          onCopyShareLink={() => {
+            void handleCopyShareLink();
+          }}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          canUndo={undoStack.length > 0}
+          canRedo={redoStack.length > 0}
+          onOpenSaveScenario={() => {
+            setScenarioDraftName('');
+            setSaveScenarioModalOpen(true);
+          }}
+        />
+
+        <QuickCalculator
+          open={quickCalcOpen}
+          onClose={() => setQuickCalcOpen(false)}
+          lang={prefs.lang}
+        />
+
+        {/* Native macOS Save Scenario Sheet */}
+        {saveScenarioModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-xs"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setSaveScenarioModalOpen(false);
+            }}
+          >
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const label =
+                  scenarioDraftName.trim() ||
+                  `${t(prefs.lang, 'Phương án', 'Scenario')} #${scenarios.length + 1}`;
+                handleSaveScenario(label);
+                setSaveScenarioModalOpen(false);
+              }}
+              className="w-96 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border border-slate-900/15 dark:border-white/15 shadow-2xl p-5 space-y-4"
+            >
+              <div>
+                <h3 className="text-[15px] font-semibold text-slate-950 dark:text-white">
+                  {t(prefs.lang, 'Lưu bản chụp Kịch bản mới', 'Save Scenario Snapshot')}
+                </h3>
+                <p className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-1">
+                  {t(
+                    prefs.lang,
+                    'Lưu toàn bộ giả định và tiến độ 40 quý hiện tại để đối chiếu hiệu quả.',
+                    'Store current assumptions and 40-quarter schedule for side-by-side comparison.'
+                  )}
+                </p>
+              </div>
+              <input
+                type="text"
+                autoFocus
+                value={scenarioDraftName}
+                onChange={(e) => setScenarioDraftName(e.target.value)}
+                placeholder={t(prefs.lang, 'Ví dụ: Phương án cơ sở / Giá bán +10%', 'e.g. Base Case / Price +10%')}
+                className="w-full px-3 py-2 rounded-xl text-[13px] bg-slate-100 dark:bg-slate-800 border border-slate-900/12 dark:border-white/12 text-slate-900 dark:text-white outline-none focus:border-[var(--accent-primary)]"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSaveScenarioModalOpen(false)}
+                  className="px-3.5 py-1.5 rounded-lg text-[12.5px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-900/6 dark:hover:bg-white/10 cursor-pointer"
+                >
+                  {t(prefs.lang, 'Huỷ', 'Cancel')}
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-lg text-[12.5px] font-semibold bg-[var(--accent-primary)] text-white hover:brightness-105 cursor-pointer"
+                >
+                  {t(prefs.lang, 'Lưu Kịch bản', 'Save')}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Native macOS Reset Confirmation Sheet */}
+        {resetConfirmOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-xs"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setResetConfirmOpen(false);
+            }}
+          >
+            <div className="w-96 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border border-slate-900/15 dark:border-white/15 shadow-2xl p-5 space-y-4">
+              <div>
+                <h3 className="text-[15px] font-semibold text-slate-950 dark:text-white">
+                  {t(prefs.lang, 'Khôi phục về Dự án Mẫu Mặc định?', 'Reset to Default Sample Project?')}
+                </h3>
+                <p className="text-[12.5px] text-slate-500 dark:text-slate-400 mt-1">
+                  {t(
+                    prefs.lang,
+                    'Các thông số đang chỉnh sửa sẽ trở về mẫu Khu Đô Thị Hỗn Hợp Riverside Park (bạn vẫn có thể Hoàn tác bằng ⌘Z).',
+                    'Active inputs will revert to the Riverside Park default sample (you can still Undo with ⌘Z).'
+                  )}
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setResetConfirmOpen(false)}
+                  className="px-3.5 py-1.5 rounded-lg text-[12.5px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-900/6 dark:hover:bg-white/10 cursor-pointer"
+                >
+                  {t(prefs.lang, 'Giữ nguyên', 'Cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    applyNewInputs(cloneInputs(SAMPLE_PROJECT_INPUTS));
+                    setResetConfirmOpen(false);
+                    showToast(t(prefs.lang, 'Đã khôi phục dự án mẫu mặc định', 'Reset to default sample'));
+                  }}
+                  className="px-4 py-1.5 rounded-lg text-[12.5px] font-semibold bg-rose-600 text-white hover:bg-rose-500 cursor-pointer"
+                >
+                  {t(prefs.lang, 'Khôi phục', 'Reset')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Subtle macOS HUD Toast */}
+        {toastMsg && (
+          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-slate-900/88 dark:bg-white/90 text-white dark:text-slate-950 backdrop-blur-xl text-[12.5px] font-medium shadow-lg pointer-events-none">
+            {toastMsg}
+          </div>
+        )}
+      </div>
+
+      {/* Print / PDF Modal placed outside #app-desktop-shell so @media print prints only this sheet */}
+      <PrintReportModal
+        open={printModalOpen}
+        onClose={() => setPrintModalOpen(false)}
+        inputs={inputs}
+        result={result}
+        prefs={prefs}
+        onExportExcel={handleExportExcel}
+      />
+    </>
   );
 }

@@ -245,7 +245,11 @@ export const ChecksAndScenariosView: React.FC<ChecksAndScenariosViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                scenarios.map((sc) => (
+                scenarios.map((sc) => {
+                  const dPat = sc.kpis.pat - result.summary.perf.pat;
+                  const dEq = sc.kpis.equity - result.financing.equity;
+                  const dIrrPp = (sc.kpis.irr - result.summary.perf.irr) * 100;
+                  return (
                   <tr
                     key={sc.id}
                     className="border-b last:border-b-0 border-slate-900/6 dark:border-white/6 text-slate-700 dark:text-slate-200 hover:bg-slate-900/[0.02] dark:hover:bg-white/[0.025]"
@@ -260,17 +264,36 @@ export const ChecksAndScenariosView: React.FC<ChecksAndScenariosViewProps> = ({
                     <td className="py-2.5 px-3 text-right font-tabular">
                       {formatMoney(sc.kpis.totalCost, lang, unitDisplay)}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-tabular font-medium text-emerald-700 dark:text-emerald-400">
-                      {formatMoney(sc.kpis.pat, lang, unitDisplay)}
+                    <td className="py-2.5 px-3 text-right font-tabular">
+                      <div className="font-medium text-emerald-700 dark:text-emerald-400">
+                        {formatMoney(sc.kpis.pat, lang, unitDisplay)}
+                      </div>
+                      {Math.abs(dPat) > 1 && (
+                        <div className={`text-[10.5px] ${dPat >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                          {dPat >= 0 ? '+' : ''}{formatMoney(dPat, lang, unitDisplay)}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 text-right font-tabular">
                       {formatPct(sc.kpis.margin, 1, lang)}
                     </td>
                     <td className="py-2.5 px-3 text-right font-tabular">
-                      {formatMoney(sc.kpis.equity, lang, unitDisplay)}
+                      <div>{formatMoney(sc.kpis.equity, lang, unitDisplay)}</div>
+                      {Math.abs(dEq) > 1 && (
+                        <div className={`text-[10.5px] ${dEq <= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          {dEq >= 0 ? '+' : ''}{formatMoney(dEq, lang, unitDisplay)}
+                        </div>
+                      )}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-tabular font-semibold text-[var(--accent-primary)]">
-                      {formatPct(sc.kpis.irr, 1, lang)}
+                    <td className="py-2.5 px-3 text-right font-tabular">
+                      <div className="font-semibold text-[var(--accent-primary)]">
+                        {formatPct(sc.kpis.irr, 1, lang)}
+                      </div>
+                      {Math.abs(dIrrPp) >= 0.05 && (
+                        <div className={`text-[10.5px] ${dIrrPp >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                          {dIrrPp >= 0 ? '+' : ''}{formatNum(dIrrPp, 1, lang)} đ%
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 text-right font-tabular">
                       {formatMoney(sc.kpis.npv, lang, unitDisplay)}
@@ -302,7 +325,8 @@ export const ChecksAndScenariosView: React.FC<ChecksAndScenariosViewProps> = ({
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

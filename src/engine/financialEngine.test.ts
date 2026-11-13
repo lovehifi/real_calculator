@@ -55,6 +55,15 @@ test('runFinancialModel produces complete, balanced 40-quarter cash flows on sam
   assert.equal(res.sens.pat[3].length, 7);
   assert.ok(Math.abs(res.sens.pat[3][3] - res.pl.pat) < 1e-4);
   assert.ok(res.sens.pat[6][0] > res.sens.pat[0][6]);
+
+  // Debt safety & Tornado sensitivity outputs
+  assert.equal(res.cf.debtBalance.q.length, 40);
+  assert.ok(res.debtMetrics.peakDebt > 0);
+  assert.ok(res.debtMetrics.peakDebtQuarter !== null);
+  assert.ok(res.debtMetrics.avgDscr !== null && res.debtMetrics.avgDscr > 0);
+  assert.equal(res.tornado.length, 5);
+  assert.equal(res.tornado[0].id, 'price');
+  assert.ok(res.tornado[0].highPat > res.tornado[0].lowPat);
 });
 
 test('runFinancialModel dynamically responds to Quarter 35 schedule edits (no 40-quarter lock)', () => {

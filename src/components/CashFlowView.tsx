@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, Search } from 'lucide-react';
+import { Download, FileSpreadsheet, Printer, Search } from 'lucide-react';
 import {
   AppPreferences,
   CalculationResult,
@@ -14,6 +14,8 @@ interface CashFlowViewProps {
   result: CalculationResult;
   prefs: AppPreferences;
   onExportCsv: () => void;
+  onExportExcel: () => void;
+  onOpenPrint: () => void;
 }
 
 interface CfStatementLine {
@@ -30,6 +32,8 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
   result,
   prefs,
   onExportCsv,
+  onExportExcel,
+  onOpenPrint,
 }) => {
   const { lang, unitDisplay } = prefs;
   const [periodMode, setPeriodMode] = useState<'quarterly' | 'annual'>('quarterly');
@@ -367,6 +371,14 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
       level: 'group',
       compactVisible: true,
     },
+    {
+      id: 'debtBalance',
+      labelVi: 'Dư nợ vay ngân hàng cuối kỳ',
+      labelEn: 'Ending Loan Debt Balance',
+      row: cf.debtBalance,
+      level: 'group',
+      compactVisible: true,
+    },
   ];
 
   const visibleLines = lines.filter((line) => {
@@ -464,7 +476,7 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
             <input
@@ -472,17 +484,35 @@ export const CashFlowView: React.FC<CashFlowViewProps> = ({
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
               placeholder={t(lang, 'Tìm khoản mục dòng tiền...', 'Search line item...')}
-              className="pl-8 pr-3 py-1.5 rounded-lg text-[12.5px] w-48 bg-white/80 dark:bg-slate-900/70 border border-slate-900/10 dark:border-white/12 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:border-[var(--accent-primary)]"
+              className="pl-8 pr-3 py-1.5 rounded-lg text-[12.5px] w-44 bg-white/80 dark:bg-slate-900/70 border border-slate-900/10 dark:border-white/12 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:border-[var(--accent-primary)]"
             />
           </div>
 
           <button
             type="button"
             onClick={onExportCsv}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-[var(--accent-primary)] text-white hover:brightness-105 transition cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-white/80 dark:bg-slate-900/70 border border-slate-900/10 dark:border-white/12 text-slate-700 dark:text-slate-200 hover:bg-slate-900/5 dark:hover:bg-white/10 transition cursor-pointer whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{t(lang, 'Xuất CSV 40 Quý', 'Export 40Q CSV')}</span>
+            <span>CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onExportExcel}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-emerald-600 text-white hover:bg-emerald-500 transition cursor-pointer whitespace-nowrap"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>{t(lang, 'Xuất Excel (.xlsx)', 'Export Excel')}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenPrint}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-[var(--accent-primary)] text-white hover:brightness-105 transition cursor-pointer whitespace-nowrap"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>{t(lang, 'In / PDF', 'Print / PDF')}</span>
           </button>
         </div>
       </div>

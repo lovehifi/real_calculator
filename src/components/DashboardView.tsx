@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { FileSpreadsheet, Printer } from 'lucide-react';
 import { AppPreferences, CalculationResult, ModelInputs } from '../types/model';
 import { PRODUCT_NAMES, t } from '../data/i18n';
 import { formatMoney, formatNum, formatPct } from '../engine/formulaParser';
@@ -7,19 +8,29 @@ interface DashboardViewProps {
   inputs: ModelInputs;
   result: CalculationResult;
   prefs: AppPreferences;
+  onExportExcel?: () => void;
+  onOpenPrint?: () => void;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ inputs, result, prefs }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({
+  inputs,
+  result,
+  prefs,
+  onExportExcel,
+  onOpenPrint,
+}) => {
   const { lang, unitDisplay } = prefs;
   const [hoveredQ, setHoveredQ] = useState<number | null>(null);
+  const [hoveredDebtQ, setHoveredDebtQ] = useState<number | null>(null);
   const [sensMode, setSensMode] = useState<'pat' | 'irr'>('pat');
+  const [tornadoMode, setTornadoMode] = useState<'pat' | 'irr'>('pat');
 
   const unitLabel =
     unitDisplay === 'billion'
       ? t(lang, 'tỷ đồng', 'VND bn')
       : t(lang, 'triệu đồng', 'VNDm');
 
-  const { pl, dev, financing, sales, summary, cf, sens } = result;
+  const { pl, dev, financing, debtMetrics, sales, summary, cf, sens, tornado } = result;
 
   // Prepare 40-quarter chart scaling
   const inflowArr = cf.inflow.q;
@@ -162,39 +173,66 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ inputs, result, pr
             </p>
           </div>
 
-          {/* Live Hover Readout or Legend */}
-          {activeHoverIdx !== null ? (
-            <div className="font-tabular text-[12px] flex items-center gap-4 px-3 py-1.5 rounded-lg bg-slate-900/6 dark:bg-white/10">
-              <span className="font-bold text-slate-900 dark:text-white">
-                Q{activeHoverIdx + 1} ({inputs.model_start_year + Math.floor(activeHoverIdx / 4)})
-              </span>
-              <span className="text-blue-600 dark:text-blue-400">
-                +{formatMoney(inflowArr[activeHoverIdx], lang, unitDisplay)}
-              </span>
-              <span className="text-rose-600 dark:text-rose-400">
-                {formatMoney(outflowArr[activeHoverIdx], lang, unitDisplay)}
-              </span>
-              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
-                {t(lang, 'Lũy kế FCFE:', 'Cum. FCFE:')}{' '}
-                {formatMoney(cumFcfeArr[activeHoverIdx], lang, unitDisplay)}
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-4 text-[12px] text-slate-600 dark:text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-blue-500" />
-                {t(lang, 'Dòng thu', 'Inflow')}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-rose-400" />
-                {t(lang, 'Dòng chi', 'Outflow')}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-4 h-0.5 bg-emerald-500" />
-                {t(lang, 'Lũy kế FCFE', 'Cum. FCFE')}
-              </span>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Live Hover Readout or Legend */}
+            {activeHoverIdx !== null ? (
+              <div className="font-tabular text-[12px] flex items-center gap-4 px-3 py-1.5 rounded-lg bg-slate-900/6 dark:bg-white/10">
+                <span className="font-bold text-slate-900 dark:text-white">
+                  Q{activeHoverIdx + 1} ({inputs.model_start_year + Math.floor(activeHoverIdx / 4)})
+                </span>
+                <span className="text-blue-600 dark:text-blue-400">
+                  +{formatMoney(inflowArr[activeHoverIdx], lang, unitDisplay)}
+                </span>
+                <span className="text-rose-600 dark:text-rose-400">
+                  {formatMoney(outflowArr[activeHoverIdx], lang, unitDisplay)}
+                </span>
+                <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                  {t(lang, 'Lũy kế FCFE:', 'Cum. FCFE:')}{' '}
+                  {formatMoney(cumFcfeArr[activeHoverIdx], lang, unitDisplay)}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-4 text-[12px] text-slate-600 dark:text-slate-300">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-blue-500" />
+                  {t(lang, 'Dòng thu', 'Inflow')}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-rose-400" />
+                  {t(lang, 'Dòng chi', 'Outflow')}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-0.5 bg-emerald-500" />
+                  {t(lang, 'Lũy kế FCFE', 'Cum. FCFE')}
+                </span>
+              </div>
+            )}
+
+            {(onExportExcel || onOpenPrint) && (
+              <div className="flex items-center gap-1.5">
+                {onExportExcel && (
+                  <button
+                    type="button"
+                    onClick={onExportExcel}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-slate-900/5 dark:bg-white/8 border border-slate-900/10 dark:border-white/12 text-slate-700 dark:text-slate-200 hover:bg-slate-900/10 dark:hover:bg-white/14 transition cursor-pointer whitespace-nowrap"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Excel (.xlsx)</span>
+                  </button>
+                )}
+                {onOpenPrint && (
+                  <button
+                    type="button"
+                    onClick={onOpenPrint}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-primary)] text-white hover:brightness-105 transition cursor-pointer whitespace-nowrap"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>{t(lang, 'In / PDF', 'Print / PDF')}</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="w-full overflow-x-auto">
@@ -637,6 +675,268 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ inputs, result, pr
           </table>
         </div>
       </section>
+
+      {/* Row 5: Debt Safety & 40Q Loan Balance + Tornado Sensitivity (±10%) */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        {/* Debt Balance & DSCR Safety */}
+        <section className="xl:col-span-6 rounded-2xl bg-white/82 dark:bg-slate-900/72 backdrop-blur-xl border border-slate-900/8 dark:border-white/10 p-4 shadow-xs flex flex-col justify-between gap-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-[14px] font-semibold text-slate-900 dark:text-white">
+                {t(lang, '6. Dư nợ Vay 40 Quý & Hệ số An toàn Nợ (DSCR)', '6. 40-Quarter Debt Balance & Coverage (DSCR)')}
+              </h3>
+              <p className="text-[12px] text-slate-500 dark:text-slate-400">
+                {hoveredDebtQ !== null
+                  ? `Q${hoveredDebtQ + 1}: ${t(lang, 'Dư nợ', 'Debt')} ${formatMoney(
+                      debtMetrics.debtBalanceQ[hoveredDebtQ],
+                      lang,
+                      unitDisplay
+                    )} ${unitLabel} · DSCR ${
+                      debtMetrics.dscrQ[hoveredDebtQ] !== null
+                        ? `${formatNum(debtMetrics.dscrQ[hoveredDebtQ]!, 2, lang)}x`
+                        : '—'
+                    }`
+                  : t(lang, 'Rê chuột lên từng quý để kiểm tra dư nợ & khả năng trả nợ', 'Hover any quarter to inspect loan balance & DSCR')}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div className="p-2.5 rounded-xl bg-slate-900/[0.03] dark:bg-white/[0.04]">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                {t(lang, 'Đỉnh dư nợ vay', 'Peak Debt')}
+              </div>
+              <div className="font-tabular text-[13.5px] font-bold text-slate-900 dark:text-white mt-0.5">
+                {formatMoney(debtMetrics.peakDebt, lang, unitDisplay)}
+              </div>
+              <div className="font-tabular text-[11px] text-slate-400">
+                {debtMetrics.peakDebtQuarter ? `Q${debtMetrics.peakDebtQuarter}` : '—'}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-900/[0.03] dark:bg-white/[0.04]">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                {t(lang, 'Đỉnh âm VCSH', 'Peak Equity Gap')}
+              </div>
+              <div className="font-tabular text-[13.5px] font-bold text-slate-900 dark:text-white mt-0.5">
+                {formatMoney(debtMetrics.peakEquityExposure, lang, unitDisplay)}
+              </div>
+              <div className="font-tabular text-[11px] text-slate-400">
+                {debtMetrics.peakEquityQuarter ? `Q${debtMetrics.peakEquityQuarter}` : '—'}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-900/[0.03] dark:bg-white/[0.04]">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                {t(lang, 'DSCR Tối thiểu', 'Min DSCR')}
+              </div>
+              <div
+                className={`font-tabular text-[13.5px] font-bold mt-0.5 ${
+                  debtMetrics.minDscr === null
+                    ? 'text-slate-700 dark:text-slate-200'
+                    : debtMetrics.minDscr >= 1.2
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-amber-600 dark:text-amber-400'
+                }`}
+              >
+                {debtMetrics.minDscr !== null ? `${formatNum(debtMetrics.minDscr, 2, lang)}x` : '—'}
+              </div>
+              <div className="text-[11px] text-slate-400">{t(lang, 'Giai đoạn trả gốc', 'Repayment')}</div>
+            </div>
+            <div className="p-2.5 rounded-xl bg-slate-900/[0.03] dark:bg-white/[0.04]">
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                {t(lang, 'DSCR Bình quân', 'Avg DSCR')}
+              </div>
+              <div className="font-tabular text-[13.5px] font-bold text-[var(--accent-primary)] mt-0.5">
+                {debtMetrics.avgDscr !== null ? `${formatNum(debtMetrics.avgDscr, 2, lang)}x` : '—'}
+              </div>
+              <div className="text-[11px] text-slate-400">{t(lang, 'Ngưỡng an toàn ≥1,2x', 'Benchmark ≥1.2x')}</div>
+            </div>
+          </div>
+
+          <div className="w-full overflow-x-auto">
+            {(() => {
+              const maxD = Math.max(1, debtMetrics.peakDebt);
+              const h = 128;
+              return (
+                <svg
+                  viewBox={`0 0 600 ${h + 22}`}
+                  className="w-full min-w-[420px] h-36 select-none"
+                  onMouseLeave={() => setHoveredDebtQ(null)}
+                >
+                  <line
+                    x1={0}
+                    y1={h}
+                    x2={600}
+                    y2={h}
+                    stroke="currentColor"
+                    className="text-slate-300 dark:text-white/20"
+                    strokeWidth={1}
+                  />
+                  {debtMetrics.debtBalanceQ.map((bal, q) => {
+                    const colW = 600 / 40;
+                    const barW = colW * 0.65;
+                    const barH = (bal / maxD) * (h - 8);
+                    const isHover = hoveredDebtQ === q;
+                    return (
+                      <g key={q} onMouseEnter={() => setHoveredDebtQ(q)} className="cursor-pointer">
+                        <rect
+                          x={q * colW}
+                          y={0}
+                          width={colW}
+                          height={h}
+                          fill={isHover ? 'rgba(120,120,140,0.1)' : 'transparent'}
+                        />
+                        {barH > 0.3 && (
+                          <rect
+                            x={q * colW + (colW - barW) / 2}
+                            y={h - barH}
+                            width={barW}
+                            height={barH}
+                            rx={2}
+                            className={
+                              isHover
+                                ? 'fill-[var(--accent-primary)]'
+                                : 'fill-indigo-500/80 dark:fill-indigo-400/80'
+                            }
+                          />
+                        )}
+                        {(q % 4 === 0 || q === 39) && (
+                          <text
+                            x={q * colW + colW / 2}
+                            y={h + 15}
+                            textAnchor="middle"
+                            className="fill-slate-400 dark:fill-slate-500 text-[9.5px] font-mono"
+                          >
+                            Q{q + 1}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </svg>
+              );
+            })()}
+          </div>
+        </section>
+
+        {/* Tornado Sensitivity Chart (±10%) */}
+        <section className="xl:col-span-6 rounded-2xl bg-white/82 dark:bg-slate-900/72 backdrop-blur-xl border border-slate-900/8 dark:border-white/10 p-4 shadow-xs flex flex-col justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-[14px] font-semibold text-slate-900 dark:text-white">
+                {t(lang, '7. Biểu đồ Độ nhạy Tornado (±10% Biến số Chính)', '7. Tornado Sensitivity (±10% Key Drivers)')}
+              </h3>
+              <p className="text-[12px] text-slate-500 dark:text-slate-400">
+                {t(
+                  lang,
+                  'Sắp xếp theo mức độ tác động mạnh nhất đến hiệu quả dự án',
+                  'Ranked by absolute impact spread from active baseline'
+                )}
+              </p>
+            </div>
+
+            <div className="flex items-center p-0.5 rounded-lg bg-slate-900/6 dark:bg-white/10 text-[12px]">
+              <button
+                type="button"
+                onClick={() => setTornadoMode('pat')}
+                className={`px-2.5 py-1 rounded-md font-medium transition cursor-pointer ${
+                  tornadoMode === 'pat'
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                {t(lang, 'LNST', 'PAT')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTornadoMode('irr')}
+                className={`px-2.5 py-1 rounded-md font-medium transition cursor-pointer ${
+                  tornadoMode === 'irr'
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                IRR (%)
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-3 my-auto">
+            {(() => {
+              const maxDelta = Math.max(
+                1e-6,
+                ...tornado.map((item) => {
+                  const base = tornadoMode === 'pat' ? item.basePat : item.baseIrr;
+                  const lo = tornadoMode === 'pat' ? item.lowPat : item.lowIrr;
+                  const hi = tornadoMode === 'pat' ? item.highPat : item.highIrr;
+                  return Math.max(Math.abs(lo - base), Math.abs(hi - base));
+                })
+              );
+
+              return tornado.map((item) => {
+                const base = tornadoMode === 'pat' ? item.basePat : item.baseIrr;
+                const lo = tornadoMode === 'pat' ? item.lowPat : item.lowIrr;
+                const hi = tornadoMode === 'pat' ? item.highPat : item.highIrr;
+                const dLow = lo - base;
+                const dHigh = hi - base;
+                const negDelta = Math.min(0, dLow, dHigh);
+                const posDelta = Math.max(0, dLow, dHigh);
+                const negPctW = (Math.abs(negDelta) / maxDelta) * 50;
+                const posPctW = (posDelta / maxDelta) * 50;
+
+                const fmtDelta = (d: number) =>
+                  tornadoMode === 'pat'
+                    ? `${d >= 0 ? '+' : ''}${formatMoney(d, lang, unitDisplay)}`
+                    : `${d >= 0 ? '+' : ''}${formatNum(d * 100, 1, lang)} đ%`;
+
+                return (
+                  <div key={item.id} className="space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-[12px]">
+                      <span className="font-medium text-slate-800 dark:text-slate-100 truncate">
+                        {lang === 'vi' ? item.labelVi : item.labelEn}
+                      </span>
+                      <span className="font-tabular text-[11.5px] shrink-0 flex items-center gap-2">
+                        <span className="text-rose-600 dark:text-rose-400">{fmtDelta(negDelta)}</span>
+                        <span className="text-slate-300 dark:text-slate-600">/</span>
+                        <span className="text-emerald-700 dark:text-emerald-400">{fmtDelta(posDelta)}</span>
+                      </span>
+                    </div>
+                    <div className="relative h-4 rounded-md bg-slate-200/70 dark:bg-white/10 overflow-hidden">
+                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-400/70 dark:bg-white/30 z-10" />
+                      {negPctW > 0.2 && (
+                        <div
+                          className="absolute top-0.5 bottom-0.5 rounded-l-sm bg-rose-500/80 dark:bg-rose-500/75"
+                          style={{ right: '50%', width: `${negPctW}%` }}
+                        />
+                      )}
+                      {posPctW > 0.2 && (
+                        <div
+                          className="absolute top-0.5 bottom-0.5 rounded-r-sm bg-emerald-600/80 dark:bg-emerald-500/75"
+                          style={{ left: '50%', width: `${posPctW}%` }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          <div className="text-[11.5px] text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-900/8 dark:border-white/10 flex items-center justify-between">
+            <span>
+              {t(lang, 'Trục giữa = Kịch bản cơ sở:', 'Center line = Baseline:')}{' '}
+              <strong className="font-tabular text-slate-800 dark:text-slate-200">
+                {tornadoMode === 'pat'
+                  ? `${formatMoney(pl.pat, lang, unitDisplay)} ${unitLabel}`
+                  : formatPct(summary.perf.irr, 2, lang)}
+              </strong>
+            </span>
+            <span className="flex items-center gap-3">
+              <span className="text-rose-600 dark:text-rose-400">{t(lang, 'Giảm hiệu quả', 'Downside')}</span>
+              <span className="text-emerald-700 dark:text-emerald-400">{t(lang, 'Tăng hiệu quả', 'Upside')}</span>
+            </span>
+          </div>
+        </section>
+      </div>
     </div>
   );
 };

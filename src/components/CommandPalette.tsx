@@ -13,6 +13,13 @@ interface CommandPaletteProps {
   onLoadPreset: (id: string) => void;
   onExportJson: () => void;
   onExportCsv: () => void;
+  onExportExcel: () => void;
+  onOpenPrint: () => void;
+  onCopyShareLink: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onOpenSaveScenario: () => void;
 }
 
@@ -33,6 +40,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onLoadPreset,
   onExportJson,
   onExportCsv,
+  onExportExcel,
+  onOpenPrint,
+  onCopyShareLink,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   onOpenSaveScenario,
 }) => {
   const [query, setQuery] = useState('');
@@ -85,6 +99,47 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       run: () => onSelectTab('checks'),
     },
     {
+      id: 'act_excel',
+      group: t(lang, 'Xuất báo cáo', 'Export & Share'),
+      label: t(lang, 'Xuất Workbook Excel đầy đủ 6 sheet (.xlsx)', 'Export 6-Sheet Excel Workbook (.xlsx)'),
+      run: onExportExcel,
+    },
+    {
+      id: 'act_print',
+      group: t(lang, 'Xuất báo cáo', 'Export & Share'),
+      label: t(lang, 'In / Lưu PDF Hồ sơ Thẩm định Đầu tư...', 'Print / Save PDF Investment Memo...'),
+      shortcut: '⌘P',
+      run: onOpenPrint,
+    },
+    {
+      id: 'act_share',
+      group: t(lang, 'Xuất báo cáo', 'Export & Share'),
+      label: t(lang, 'Sao chép Liên kết Chia sẻ Dự án', 'Copy Shareable Deal Link'),
+      run: onCopyShareLink,
+    },
+    ...(canUndo
+      ? [
+          {
+            id: 'act_undo',
+            group: t(lang, 'Chỉnh sửa', 'Edit'),
+            label: t(lang, 'Hoàn tác thao tác trước', 'Undo Last Edit'),
+            shortcut: '⌘Z',
+            run: onUndo,
+          },
+        ]
+      : []),
+    ...(canRedo
+      ? [
+          {
+            id: 'act_redo',
+            group: t(lang, 'Chỉnh sửa', 'Edit'),
+            label: t(lang, 'Làm lại thao tác vừa hoàn tác', 'Redo Edit'),
+            shortcut: '⌘⇧Z',
+            run: onRedo,
+          },
+        ]
+      : []),
+    {
       id: 'act_save_sc',
       group: t(lang, 'Thao tác nhanh', 'Actions'),
       label: t(lang, 'Chụp & Lưu Kịch bản hiện tại...', 'Save Current Model as Scenario...'),
@@ -92,14 +147,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     },
     {
       id: 'act_csv',
-      group: t(lang, 'Thao tác nhanh', 'Actions'),
+      group: t(lang, 'Xuất báo cáo', 'Export & Share'),
       label: t(lang, 'Xuất báo cáo Dòng tiền 40 Quý (.csv)', 'Export 40-Quarter Cash Flow (.csv)'),
       shortcut: '⌘E',
       run: onExportCsv,
     },
     {
       id: 'act_json',
-      group: t(lang, 'Thao tác nhanh', 'Actions'),
+      group: t(lang, 'Xuất báo cáo', 'Export & Share'),
       label: t(lang, 'Lưu tệp dự án độc lập (.json)', 'Save Project File (.json)'),
       shortcut: '⌘S',
       run: onExportJson,

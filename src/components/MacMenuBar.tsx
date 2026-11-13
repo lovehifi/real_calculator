@@ -3,7 +3,9 @@ import {
   Calculator,
   Check,
   Command,
+  Menu,
   Play,
+  Share2,
   SlidersHorizontal,
   FolderKanban,
 } from 'lucide-react';
@@ -19,15 +21,22 @@ interface MacMenuBarProps {
   activeTab: WorkspaceTab;
   onSelectTab: (tab: WorkspaceTab) => void;
   canUndo: boolean;
+  canRedo: boolean;
   onUndo: () => void;
+  onRedo: () => void;
   onLoadPreset: (presetId: string) => void;
+  onDuplicateProject: () => void;
   onTriggerImportJson: () => void;
   onExportJson: () => void;
   onExportCsv: () => void;
+  onExportExcel: () => void;
+  onOpenPrint: () => void;
+  onCopyShareLink: () => void;
   onNormalizeAllTimelines: () => void;
   onOpenCommandPalette: () => void;
   onToggleQuickCalc: () => void;
   onToggleCustomize: () => void;
+  onToggleMobileSidebar: () => void;
   onSaveScenarioModal: () => void;
   onManualRecalculate: () => void;
   isDirtyManual: boolean;
@@ -46,15 +55,22 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
   activeTab,
   onSelectTab,
   canUndo,
+  canRedo,
   onUndo,
+  onRedo,
   onLoadPreset,
+  onDuplicateProject,
   onTriggerImportJson,
   onExportJson,
   onExportCsv,
+  onExportExcel,
+  onOpenPrint,
+  onCopyShareLink,
   onNormalizeAllTimelines,
   onOpenCommandPalette,
   onToggleQuickCalc,
   onToggleCustomize,
+  onToggleMobileSidebar,
   onSaveScenarioModal,
   onManualRecalculate,
   isDirtyManual,
@@ -103,7 +119,16 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
     >
       {/* Left: Traffic lights + Native macOS Dropdown Menus */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="flex items-center gap-2 pr-1" title={t(lang, 'Điều khiển cửa sổ Tauri', 'Tauri Window Controls')}>
+        <button
+          type="button"
+          onClick={onToggleMobileSidebar}
+          aria-label={t(lang, 'Mở danh sách điều hướng', 'Toggle Navigation Drawer')}
+          className="md:hidden p-1.5 rounded-md text-slate-700 dark:text-slate-200 hover:bg-slate-900/8 dark:hover:bg-white/12 transition cursor-pointer"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
+
+        <div className="hidden sm:flex items-center gap-2 pr-1" title={t(lang, 'Điều khiển cửa sổ Tauri', 'Tauri Window Controls')}>
           <button
             type="button"
             onClick={onRequestResetConfirm}
@@ -131,7 +156,7 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
           />
         </div>
 
-        <span className="font-semibold text-[13px] tracking-tight text-slate-900 dark:text-white hidden sm:inline">
+        <span className="font-semibold text-[13px] tracking-tight text-slate-900 dark:text-white hidden sm:inline whitespace-nowrap">
           Real Calculator
         </span>
 
@@ -172,6 +197,15 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
                         ))}
                         <MenuDivider />
                         <MenuItem
+                          label={t(lang, 'Nhân bản thành Dự án mới', 'Duplicate as New Project')}
+                          onClick={() => closeAndRun(onDuplicateProject)}
+                        />
+                        <MenuItem
+                          label={t(lang, 'Sao chép Liên kết Chia sẻ...', 'Copy Shareable Deal Link...')}
+                          onClick={() => closeAndRun(onCopyShareLink)}
+                        />
+                        <MenuDivider />
+                        <MenuItem
                           label={t(lang, 'Mở tệp dự án (.json)...', 'Open Project (.json)...')}
                           shortcut="⌘O"
                           onClick={() => closeAndRun(onTriggerImportJson)}
@@ -182,9 +216,18 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
                           onClick={() => closeAndRun(onExportJson)}
                         />
                         <MenuItem
+                          label={t(lang, 'Xuất Workbook Excel 6 sheet (.xlsx)', 'Export 6-Sheet Excel (.xlsx)')}
+                          onClick={() => closeAndRun(onExportExcel)}
+                        />
+                        <MenuItem
                           label={t(lang, 'Xuất dòng tiền 40 quý (.csv)', 'Export 40Q Cash Flow (.csv)')}
                           shortcut="⌘E"
                           onClick={() => closeAndRun(onExportCsv)}
+                        />
+                        <MenuItem
+                          label={t(lang, 'In / Lưu PDF Hồ sơ Đầu tư...', 'Print / Save PDF Memo...')}
+                          shortcut="⌘P"
+                          onClick={() => closeAndRun(onOpenPrint)}
                         />
                       </>
                     )}
@@ -196,6 +239,12 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
                           shortcut="⌘Z"
                           disabled={!canUndo}
                           onClick={() => closeAndRun(onUndo)}
+                        />
+                        <MenuItem
+                          label={t(lang, 'Làm lại thao tác vừa hoàn tác', 'Redo Edit')}
+                          shortcut="⌘⇧Z"
+                          disabled={!canRedo}
+                          onClick={() => closeAndRun(onRedo)}
                         />
                         <MenuDivider />
                         <MenuItem
@@ -435,9 +484,19 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
 
         <button
           type="button"
+          onClick={onCopyShareLink}
+          title={t(lang, 'Sao chép liên kết chia sẻ dự án này', 'Copy shareable project URL')}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-900/8 dark:hover:bg-white/12 border border-slate-900/8 dark:border-white/10 transition cursor-pointer whitespace-nowrap"
+        >
+          <Share2 className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+          <span className="hidden md:inline">{t(lang, 'Chia sẻ', 'Share')}</span>
+        </button>
+
+        <button
+          type="button"
           onClick={onOpenCommandPalette}
           title={t(lang, 'Tìm kiếm lệnh & chỉ tiêu (⌘K)', 'Command Palette (⌘K)')}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] text-slate-600 dark:text-slate-300 bg-slate-900/5 dark:bg-white/8 hover:bg-slate-900/10 dark:hover:bg-white/15 border border-slate-900/8 dark:border-white/10 transition cursor-pointer"
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] text-slate-600 dark:text-slate-300 bg-slate-900/5 dark:bg-white/8 hover:bg-slate-900/10 dark:hover:bg-white/15 border border-slate-900/8 dark:border-white/10 transition cursor-pointer whitespace-nowrap"
         >
           <Command className="w-3.5 h-3.5" />
           <span className="hidden xl:inline">{t(lang, 'Lệnh nhanh', 'Search')}</span>
@@ -458,7 +517,7 @@ export const MacMenuBar: React.FC<MacMenuBarProps> = ({
           type="button"
           onClick={onToggleCustomize}
           title={t(lang, 'Tuỳ chỉnh giao diện macOS (⌘,)', 'Customize Appearance (⌘,)')}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-900/8 dark:hover:bg-white/12 border border-slate-900/8 dark:border-white/10 transition cursor-pointer"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-900/8 dark:hover:bg-white/12 border border-slate-900/8 dark:border-white/10 transition cursor-pointer whitespace-nowrap"
         >
           <SlidersHorizontal className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
           <span className="hidden md:inline">{t(lang, 'Tuỳ chỉnh', 'Customize')}</span>

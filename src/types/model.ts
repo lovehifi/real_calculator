@@ -205,6 +205,32 @@ export interface CashFlowStatement {
   shDiv: CashFlowRow;
   fcfe: CashFlowRow;
   cumFcfe: CashFlowRow;
+  debtBalance: CashFlowRow;
+}
+
+export interface DebtSafetyMetrics {
+  debtBalanceQ: number[];
+  dscrQ: (number | null)[];
+  peakDebt: number;
+  peakDebtQuarter: number | null;
+  peakEquityExposure: number;
+  peakEquityQuarter: number | null;
+  minDscr: number | null;
+  avgDscr: number | null;
+}
+
+export interface TornadoDriverResult {
+  id: 'price' | 'build' | 'land' | 'interest' | 'opex';
+  labelVi: string;
+  labelEn: string;
+  basePat: number;
+  lowPat: number;
+  highPat: number;
+  baseIrr: number;
+  lowIrr: number;
+  highIrr: number;
+  patSpread: number;
+  irrSpread: number;
 }
 
 export interface CalculationResult {
@@ -320,6 +346,7 @@ export interface CalculationResult {
     distribution: number;
     minEndCash: number;
   };
+  debtMetrics: DebtSafetyMetrics;
   summary: {
     totalNSA: number;
     totalUnits: number;
@@ -352,6 +379,7 @@ export interface CalculationResult {
     irr: number[][];      // 7x7 IRR decimal
     baseIndex: [number, number];
   };
+  tornado: TornadoDriverResult[];
   timelineAudit: {
     profiles: Record<'land' | 'luf' | 'design_legal' | 'gallery' | 'infra', { sum: number; ok: boolean; firstQ: number | null; lastQ: number | null }>;
     products: ProductTimelineAudit[];
@@ -374,6 +402,13 @@ export interface ScenarioSnapshot {
     npv: number;
     paybackYears: number | null;
   };
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  updatedAt: string;
+  inputs: ModelInputs;
 }
 
 export type ThemeMode = 'light' | 'dark';

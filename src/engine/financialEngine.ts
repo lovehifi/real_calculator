@@ -2,11 +2,13 @@ import {
   CalculationResult,
   CashFlowRow,
   CashFlowStatement,
+  DebtSafetyMetrics,
   ModelCheckItem,
   ModelInputs,
   ProductCode,
   ProductSalesItem,
   ProductTimelineAudit,
+  TornadoDriverResult,
 } from '../types/model';
 
 const PRODUCTS: ProductCode[] = ['ls', 'th', 'vl', 'ps', 'ap'];
@@ -555,6 +557,7 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
   let distQ = new Array<number>(40).fill(0);
   let openQ = new Array<number>(40).fill(0);
   let endQ = new Array<number>(40).fill(0);
+  let debtBalanceQ = new Array<number>(40).fill(0);
 
   let estTotalInterest =
     landTransfer * landLoanRatio * annualInterest * 1.4 +
@@ -585,6 +588,7 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
     distQ = new Array<number>(40).fill(0);
     openQ = new Array<number>(40).fill(0);
     endQ = new Array<number>(40).fill(0);
+    debtBalanceQ = new Array<number>(40).fill(0);
 
     // Precompute future remaining outflows at each quarter so dividends never starve upcoming costs
     const baseNonDebtFlow = new Array<number>(40).fill(0);
@@ -650,6 +654,7 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
 
       cashBalance = cashAfterOpsAndInt;
       endQ[q] = cashBalance;
+      debtBalanceQ[q] = debtBalance;
     }
 
     // Sweep any residual cash at the final active quarter if debt is 0
@@ -796,6 +801,51 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
     shDiv: makeFlowRow(shDivQ),
     fcfe: makeFlowRow(fcfeQ),
     cumFcfe: makeFlowRow(cumFcfeQ, 'cum'),
+    debtBalance: makeFlowRow(debtBalanceQ, 'end'),
+  };
+
+  // Compute Debt Safety & Peak Capital Exposure Metrics
+  let peakDebt = 0;
+  let peakDebtQuarter: number | null = null;
+  let minCumFcfe = 0;
+  let peakEquityQuarter: number | null = null;
+  const dscrQ: (number | null)[] = new Array<number | null>(40).fill(null);
+  const repayDscrVals: number[] = [];
+  let repayCadSum = 0;
+  let repayDsSum = 0;
+
+  for (let q = 0; q < 40; q++) {
+    if (debtBalanceQ[q] > peakDebt) {
+      peakDebt = debtBalanceQ[q];
+      peakDebtQuarter = q + 1;
+    }
+    if (cumFcfeQ[q] < minCumFcfe) {
+      minCumFcfe = cumFcfeQ[q];
+      peakEquityQuarter = q + 1;
+    }
+    const debtService = Math.abs(interestQ[q] + principalQ[q]);
+    if (debtService > 10) {
+      const cad =
+        revQ[q] + outVatQ[q] + landAcqQ[q] + devQ[q] + opexQ[q] + taxesQ[q] + openQ[q];
+      const ratio = cad / debtService;
+      dscrQ[q] = ratio;
+      if (principalQ[q] < -1) {
+        repayDscrVals.push(ratio);
+        repayCadSum += cad;
+        repayDsSum += debtService;
+      }
+    }
+  }
+
+  const debtMetrics: DebtSafetyMetrics = {
+    debtBalanceQ,
+    dscrQ,
+    peakDebt,
+    peakDebtQuarter,
+    peakEquityExposure: Math.abs(minCumFcfe),
+    peakEquityQuarter,
+    minDscr: repayDscrVals.length > 0 ? Math.min(...repayDscrVals) : null,
+    avgDscr: repayDsSum > 0 ? repayCadSum / repayDsSum : null,
   };
 
   // =========================================================================
@@ -1113,6 +1163,101 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
     }
   }
 
+  // =========================================================================
+  // 9. ONE-WAY TORNADO SENSITIVITY (±10% ON CORE PROJECT DRIVERS)
+  // =========================================================================
+  const tornado: TornadoDriverResult[] = [];
+  if (includeSensitivity) {
+    const driverSpecs: {
+      id: TornadoDriverResult['id'];
+      labelVi: string;
+      labelEn: string;
+      applyFactor: (factor: number) => ModelInputs;
+    }[] = [
+      {
+        id: 'price',
+        labelVi: 'Đơn giá bán sản phẩm (±10%)',
+        labelEn: 'Selling Prices (±10%)',
+        applyFactor: (f) => ({
+          ...inp,
+          lowrise_shop_land_price_component: inp.lowrise_shop_land_price_component * f,
+          townhouse_land_price_component: inp.townhouse_land_price_component * f,
+          villa_land_price_component: inp.villa_land_price_component * f,
+          podium_shop_base_selling_price: inp.podium_shop_base_selling_price * f,
+          apartment_base_selling_price: inp.apartment_base_selling_price * f,
+        }),
+      },
+      {
+        id: 'build',
+        labelVi: 'Suất đầu tư xây dựng & hạ tầng (±10%)',
+        labelEn: 'Construction & Infra Unit Cost (±10%)',
+        applyFactor: (f) => ({
+          ...inp,
+          infrastructure_unit_rate: inp.infrastructure_unit_rate * f,
+          highrise_build_cost_rate: inp.highrise_build_cost_rate * f,
+          lowrise_shop_build_cost_rate: inp.lowrise_shop_build_cost_rate * f,
+          townhouse_build_cost_rate: inp.townhouse_build_cost_rate * f,
+          villa_build_cost_rate: inp.villa_build_cost_rate * f,
+        }),
+      },
+      {
+        id: 'land',
+        labelVi: 'Chi phí chuyển nhượng đất & TSDĐ (±10%)',
+        labelEn: 'Land Acquisition & LUF Cost (±10%)',
+        applyFactor: (f) => ({
+          ...inp,
+          land_transfer_unit_price: inp.land_transfer_unit_price * f,
+          land_use_fee: inp.land_use_fee * f,
+        }),
+      },
+      {
+        id: 'interest',
+        labelVi: 'Lãi suất vay ngân hàng (±10%)',
+        labelEn: 'Loan Interest Rate (±10%)',
+        applyFactor: (f) => ({
+          ...inp,
+          annual_loan_interest_rate: inp.annual_loan_interest_rate * f,
+        }),
+      },
+      {
+        id: 'opex',
+        labelVi: 'Chi phí bán hàng, tư vấn & QLDN (±10%)',
+        labelEn: 'Selling, Consultancy & G&A (±10%)',
+        applyFactor: (f) => ({
+          ...inp,
+          sales_commission_rate: inp.sales_commission_rate * f,
+          marketing_rate: inp.marketing_rate * f,
+          ga_rate: inp.ga_rate * f,
+          design_consultant_rate: inp.design_consultant_rate * f,
+          project_management_rate: inp.project_management_rate * f,
+        }),
+      },
+    ];
+
+    for (const spec of driverSpecs) {
+      const lowRes = runFinancialModel(spec.applyFactor(0.9), false);
+      const highRes = runFinancialModel(spec.applyFactor(1.1), false);
+      const lowPat = lowRes.pl.pat;
+      const highPat = highRes.pl.pat;
+      const lowIrr = lowRes.summary.perf.irr;
+      const highIrr = highRes.summary.perf.irr;
+      tornado.push({
+        id: spec.id,
+        labelVi: spec.labelVi,
+        labelEn: spec.labelEn,
+        basePat: pat,
+        lowPat,
+        highPat,
+        baseIrr: annualIrr,
+        lowIrr,
+        highIrr,
+        patSpread: Math.abs(highPat - lowPat),
+        irrSpread: Math.abs(highIrr - lowIrr),
+      });
+    }
+    tornado.sort((a, b) => b.patSpread - a.patSpread);
+  }
+
   return {
     planning: {
       land: {
@@ -1226,6 +1371,7 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
       distribution,
       minEndCash: minCash,
     },
+    debtMetrics,
     summary: {
       totalNSA,
       totalUnits,
@@ -1258,6 +1404,7 @@ export function runFinancialModel(inp: ModelInputs, includeSensitivity = true): 
       irr: sensIrr,
       baseIndex: [3, 3],
     },
+    tornado,
     timelineAudit: {
       profiles: profilesAudit,
       products: productAudits,
