@@ -1,0 +1,6 @@
+{
+  "name": "Real Calculator Studio",
+  "description": "Ứng dụng thẩm định tài chính dự án bất động sản độc lập phong cách macOS Desktop với dòng tiền 40 quý mở khóa toàn phần và giao diện kính mờ tùy biến.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
